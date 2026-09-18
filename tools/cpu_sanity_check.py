@@ -58,7 +58,8 @@ def main():
 
     print("Building model on CPU...")
     model = exp.get_model()
-    model.train()  # exp's freeze_stem monkeypatch (if enabled) keeps the stem in eval()
+    model.train()
+    exp.reapply_stem_freeze(model)  # re-apply eval() to the frozen stem after model.train()
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)

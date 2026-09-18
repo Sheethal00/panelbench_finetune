@@ -88,7 +88,8 @@ def main():
 
     # ---- model ----
     model = exp.get_model().to(device)
-    model.train()  # keeps exp's freeze_stem monkeypatch (if enabled) forcing the stem to eval()
+    model.train()
+    exp.reapply_stem_freeze(model)  # model.train() just re-enabled BN training on the frozen stem too -- undo that
     if args.ckpt:
         logger.info(f"Loading checkpoint for fine-tuning: {args.ckpt}")
         ckpt = torch.load(args.ckpt, map_location=device)["model"]

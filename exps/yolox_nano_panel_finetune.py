@@ -7,8 +7,8 @@ YOLOX repo.
 
 EDIT THESE TWO BEFORE RUNNING:
 """
-NUM_CLASSES = 0          # <-- set from verify_dataset.py / convert script output
-DATA_DIR = "/data/panel_coco"   # <-- set to your --output-dir from the converter
+NUM_CLASSES = 3          # <-- set from verify_dataset.py / convert script output
+DATA_DIR = "/home/sheethal00/panelbench_finetune/data"   # <-- set to your --output-dir from the converter
 
 import os  # noqa: E402
 
@@ -157,23 +157,30 @@ class Exp(MyExp):
         stem.eval()
 
         # requires_grad=False stops weight updates, but nn.Module.train()
-        # (called by the Trainer every epoch) would still flip this
-        # submodule's BatchNorm layers back into training mode and let
-        # their running_mean/running_var keep updating off tiny, unusual
-        # batches -- which defeats the point of "frozen" for a submodule
-        # meant to keep its pretrained statistics. Monkey-patch train() on
-        # this model instance so the stem is always forced back to eval()
-        # regardless of who calls .train().
-        model = self.model
-        original_train = model.train
-
-        def train_keep_stem_frozen(mode=True):
-            original_train(mode)
-            stem.eval()
-            return model
-
-        model.train = train_keep_stem_frozen
-
+        # (called at the start of any training script) would still flip
+        # this submodule's BatchNorm layers back into training mode and
+        # let their running_mean/running_var keep updating off tiny,
+        # unusual batches -- which defeats the point of "frozen" for a
+        # submodule meant to keep its pretrained statistics.
+        #
+        # NOTE: an earlier version of this method monkey-patched
+        # model.train() to force the stem back to eval() automatically.
+        # That broke under yolox.utils.ModelEMA, which does
+        # `deepcopy(model).eval()` internally -- deep-copying a closure
+        # doesn't rebind it to the copy, so calling .eval() on the EMA
+        # copy ended up calling the *original* live model's patched
+        # train() instead, silently flipping the real model into eval
+        # mode. Simpler and safer: don't patch anything. Training
+        # scripts must call `exp.reapply_stem_freeze(model)` once, right
+        # after every `model.train()` call, instead.
         logger.info(f"[panel-finetune] froze {n_frozen} backbone-stem "
                     f"parameter tensor(s); stem BatchNorm forced to eval() "
                     f"to keep pretrained running stats")
+
+    def reapply_stem_freeze(self, model):
+        """Call this once right after any `model.train()` in a training
+        script, if self.freeze_stem is True -- nn.Module.train() cascades
+        to every submodule including the frozen stem, so it needs to be
+        put back into eval() every time .train() is called."""
+        if self.freeze_stem:
+            model.backbone.backbone.eval()
