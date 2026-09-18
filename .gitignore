@@ -1,8 +1,33 @@
+# --- Python / venv ---
 __pycache__/
 *.pyc
-mlruns/
-YOLOX_outputs/
+*.egg-info/
+yolox_env/
+.venv/
+venv/
+
+# --- Cloned upstream repo (not part of this repo; re-cloned by setup script) ---
+YOLOX/
+
+# --- Model weights / exported artifacts (large binaries, don't belong in git) ---
 *.pth
 *.onnx
 *.tflite
+*.pt
+
+# --- Converted dataset (large, regenerate from the Roboflow export instead) ---
+/data/
+*.coco.json
+roboflow_export/
+
+# --- MLflow / training run outputs ---
+mlruns/
+mlartifacts/
+YOLOX_outputs/
+
+# --- Env files (may hold MLFLOW_TRACKING_URI, tokens, etc.) ---
 .env
+
+# --- OS/editor cruft ---
+.DS_Store
+*.swp
