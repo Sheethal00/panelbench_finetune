@@ -62,6 +62,12 @@ def main():
                      help="Defaults to exp.output_dir/<experiment-name>, "
                           "matching YOLOX's own layout")
     ap.add_argument("--no-mlflow", action="store_true", help="Skip MLflow logging entirely")
+    ap.add_argument("--resume", action="store_true",
+                     help="Resume from <output-dir>/latest_ckpt.pth if it exists "
+                          "(e.g. after a power loss or Ctrl+C). Ignored if no such "
+                          "checkpoint is found -- starts fresh instead. Use the same "
+                          "--batch-size as the run being resumed; a mismatch throws off "
+                          "the LR schedule's iteration math.")
     args = ap.parse_args()
 
     exp = get_exp(args.exp_file, None)
@@ -97,6 +103,45 @@ def main():
 
     optimizer = exp.get_optimizer(args.batch_size)
     lr_scheduler = exp.get_lr_scheduler(exp.basic_lr_per_img * args.batch_size, max_iter)
+
+    no_aug_start_epoch = exp.max_epoch - exp.no_aug_epochs
+    start_epoch = 0
+    best_loss = float("inf")
+    mosaic_closed = False
+
+    # ---- resume, if requested and a checkpoint exists ----
+    # Deliberately checked *after* the --ckpt (pretrained COCO weights)
+    # load above and *before* EMA construction below: resuming should
+    # pick up exactly where a previous run left off, not re-apply the
+    # original pretrained weights on top, and the EMA average should
+    # start from the resumed weights, not from scratch.
+    latest_ckpt_path = os.path.join(output_dir, "latest_ckpt.pth")
+    if args.resume:
+        if os.path.isfile(latest_ckpt_path):
+            logger.info(f"Resuming from {latest_ckpt_path}")
+            resume_ckpt = torch.load(latest_ckpt_path, map_location=device)
+            model.load_state_dict(resume_ckpt["model"])
+            optimizer.load_state_dict(resume_ckpt["optimizer"])
+            start_epoch = resume_ckpt["start_epoch"]
+            best_loss = resume_ckpt.get("training_best_loss", float("inf"))
+            saved_batch_size = resume_ckpt.get("batch_size")
+            if saved_batch_size is not None and saved_batch_size != args.batch_size:
+                logger.warning(
+                    f"Resuming with --batch-size {args.batch_size}, but the checkpoint "
+                    f"was saved with batch_size {saved_batch_size} -- the LR schedule's "
+                    f"iteration math will be off. Use --batch-size {saved_batch_size} instead."
+                )
+            exp.reapply_stem_freeze(model)  # load_state_dict doesn't touch train/eval mode, but no harm being explicit
+            if start_epoch >= no_aug_start_epoch:
+                train_loader.close_mosaic()
+                model.head.use_l1 = True
+                mosaic_closed = True
+            logger.info(f"Resumed at epoch {start_epoch}/{exp.max_epoch}, "
+                        f"best training loss so far: {best_loss:.3f}")
+        else:
+            logger.warning(f"--resume passed but no checkpoint found at "
+                            f"{latest_ckpt_path} -- starting fresh")
+
     ema_model = ModelEMA(model, 0.9998) if exp.ema else None
 
     # ---- mlflow (reuses YOLOX's own built-in logger, same one `-l mlflow`
@@ -111,10 +156,14 @@ def main():
         )
         mlflow_logger.setup(args=mlflow_args, exp=exp)
 
-    no_aug_start_epoch = exp.max_epoch - exp.no_aug_epochs
-    mosaic_closed = False
-    global_step = 0
-    best_loss = float("inf")
+    global_step = start_epoch * max_iter
+
+    if start_epoch >= exp.max_epoch:
+        raise SystemExit(
+            f"Resumed checkpoint is already at epoch {start_epoch}/{exp.max_epoch} -- "
+            f"training was already complete. Nothing to do. (Raise max_epoch in the "
+            f"exp file first if you want to keep training this run further.)"
+        )
 
     logger.info("Training start (CPU)...")
     train_start = time.time()
@@ -128,7 +177,7 @@ def main():
     # loop, same as the real Trainer does.
     train_iter = iter(train_loader)
 
-    for epoch in range(exp.max_epoch):
+    for epoch in range(start_epoch, exp.max_epoch):
         if epoch >= no_aug_start_epoch and not mosaic_closed:
             logger.info("--- closing mosaic, enabling L1 loss for the remaining epochs ---")
             train_loader.close_mosaic()
@@ -186,6 +235,8 @@ def main():
             "optimizer": optimizer.state_dict(),
             "best_ap": 0.0,   # no real eval AP computed here -- see module docstring
             "curr_ap": None,
+            "training_best_loss": best_loss,   # for --resume
+            "batch_size": args.batch_size,     # for --resume's LR-schedule sanity check
         }
         save_checkpoint(ckpt_state, is_best, output_dir, "latest")
         if (epoch + 1) % args.save_every == 0 or epoch + 1 == exp.max_epoch:
