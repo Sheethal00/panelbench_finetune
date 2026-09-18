@@ -119,6 +119,15 @@ def main():
     logger.info("Training start (CPU)...")
     train_start = time.time()
 
+    # YOLOX's dataloader uses an InfiniteSampler -- it never raises
+    # StopIteration on its own. The real Trainer handles this by creating
+    # ONE iterator for the whole run and manually pulling exactly max_iter
+    # batches per "epoch" (see yolox/core/trainer.py's train_in_iter). A
+    # plain `for batch in train_loader:` loop here would just run forever
+    # within a single epoch -- create the iterator once, outside the epoch
+    # loop, same as the real Trainer does.
+    train_iter = iter(train_loader)
+
     for epoch in range(exp.max_epoch):
         if epoch >= no_aug_start_epoch and not mosaic_closed:
             logger.info("--- closing mosaic, enabling L1 loss for the remaining epochs ---")
@@ -128,7 +137,8 @@ def main():
 
         epoch_losses = []
         epoch_start = time.time()
-        for it, (inps, targets, img_info, ids) in enumerate(train_loader):
+        for it in range(max_iter):
+            inps, targets, img_info, ids = next(train_iter)
             inps = inps.to(device).float()
             targets = targets.to(device).float()
             targets.requires_grad = False
