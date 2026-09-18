@@ -1,0 +1,10 @@
+# Install YOLOX itself separately (git clone + pip install -e .), which
+# pulls its own requirements.txt (torch, torchvision, pycocotools, etc --
+# follow the same "install torch+torchvision together from one index-url"
+# rule already noted for conversion/export_yolox.sh). This file is just
+# what this pipeline's own scripts need on top of that.
+
+mlflow>=2.8,<3.0        # matches YOLOX's built-in MlflowLogger's synchronous-log support check
+python-dotenv>=1.0      # required by yolox.utils.MlflowLogger even if you don't use a .env file
+pillow                  # scripts/verify_dataset.py, scripts/convert_yolo_txt_to_coco.py
+pyyaml                  # scripts/convert_yolo_txt_to_coco.py (reads data.yaml's `names:` list)

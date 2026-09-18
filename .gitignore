@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+mlruns/
+YOLOX_outputs/
+*.pth
+*.onnx
+*.tflite
+.env
